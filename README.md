@@ -344,14 +344,3 @@ Run tests:
 - Settings are stored using platform-standard storage (SharedPreferences/UserDefaults)
 - For sensitive applications, consider implementing encrypted storage via custom repository
 
-## License
-
-[Add your license here]
-
-## Contributing
-
-[Add contribution guidelines here]
-
-## Support
-
-[Add support information here]
