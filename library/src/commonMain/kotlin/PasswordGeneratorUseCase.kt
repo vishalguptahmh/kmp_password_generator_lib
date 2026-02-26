@@ -75,22 +75,26 @@ class PasswordGeneratorUseCase(private val repository: PasswordGeneratorReposito
         val password = StringBuilder()
         val requiredChars = mutableListOf<Char>()
 
+        // Filter character sets based on what's actually available in charSet after exclusions
+        val availableUppercase = uppercase.filter { it in charSet }
+        val availableLowercase = lowercase.filter { it in charSet }
+        val availableNumbers = numbers.filter { it in charSet }
+        val availableSpecialChars = specialChars.filter { it in charSet }
 
-
-        // Ensure at least one character from each selected set (if not already satisfied)
-        if (includeUppercase && uppercase.isNotEmpty() && requiredChars.none { it in uppercase }) {
-            requiredChars.add(uppercase[random.nextInt(uppercase.length)])
+        // Ensure at least one character from each selected set (if available and not already satisfied)
+        if (includeUppercase && availableUppercase.isNotEmpty() && requiredChars.none { it in availableUppercase }) {
+            requiredChars.add(availableUppercase[random.nextInt(availableUppercase.length)])
         }
-        if (includeLowercase && lowercase.isNotEmpty() && requiredChars.none { it in lowercase }) {
-            requiredChars.add(lowercase[random.nextInt(lowercase.length)])
+        if (includeLowercase && availableLowercase.isNotEmpty() && requiredChars.none { it in availableLowercase }) {
+            requiredChars.add(availableLowercase[random.nextInt(availableLowercase.length)])
         }
 
-        if (includeNumbers && numbers.isNotEmpty() && requiredChars.none { it in numbers }) {
-            requiredChars.add(numbers[random.nextInt(numbers.length)])
+        if (includeNumbers && availableNumbers.isNotEmpty() && requiredChars.none { it in availableNumbers }) {
+            requiredChars.add(availableNumbers[random.nextInt(availableNumbers.length)])
         }
 
-        if (includeSpecialChars && specialChars.isNotEmpty() && requiredChars.none { it in specialChars }) {
-            requiredChars.add(specialChars[random.nextInt(specialChars.length)])
+        if (includeSpecialChars && availableSpecialChars.isNotEmpty() && requiredChars.none { it in availableSpecialChars }) {
+            requiredChars.add(availableSpecialChars[random.nextInt(availableSpecialChars.length)])
         }
 
         // Fill the rest with random characters
