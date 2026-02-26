@@ -1,0 +1,12 @@
+# .actionlintrc.yml
+self-hosted-runner:
+  labels:
+    - self-hosted
+    - linux
+    - macos
+    - windows
+
+# Ignore specific checks
+ignore:
+  - labeler
+  - shellcheck

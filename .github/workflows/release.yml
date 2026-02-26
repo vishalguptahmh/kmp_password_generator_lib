@@ -1,0 +1,282 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'  # Matches semantic version tags like v1.0.0, v2.1.3, etc.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g., v1.0.0)'
+        required: true
+        type: string
+      release_name:
+        description: 'Release name'
+        required: false
+        type: string
+      release_notes:
+        description: 'Release notes (markdown supported)'
+        required: false
+        type: string
+      prerelease:
+        description: 'Mark as prerelease'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  # Build all artifacts for release
+  build-release-artifacts:
+    name: Build Release Artifacts
+    runs-on: macos-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.tag.outputs.tag }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for version detection
+
+      - name: Determine version and tag
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+
+          # Extract version from tag (remove 'v' prefix if present)
+          VERSION="${TAG#v}"
+
+          {
+            echo "tag=${TAG}"
+            echo "version=${VERSION}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Tag: ${TAG}"
+          echo "Version: ${VERSION}"
+
+      - name: Set tag output
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Validate Gradle Wrapper
+        uses: gradle/actions/wrapper-validation@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Cache Gradle dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Cache Kotlin/Native
+        uses: actions/cache@v4
+        with:
+          path: ~/.konan
+          key: ${{ runner.os }}-konan-${{ hashFiles('**/.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-konan-
+
+      - name: Update version in build.gradle.kts
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          # Update version in library/build.gradle.kts if needed
+          # This assumes the version is set in the file
+          echo "Building version: ${VERSION}"
+
+      - name: Build JVM JAR
+        uses: gradle/gradle-build-action@v2
+        with:
+          arguments: :library:jvmJar :library:createJarBundle --no-configuration-cache
+
+      - name: Build Android AAR
+        uses: gradle/gradle-build-action@v2
+        with:
+          arguments: :library:build --no-configuration-cache
+
+      - name: Build iOS XCFramework
+        uses: gradle/gradle-build-action@v2
+        with:
+          arguments: :library:buildXCFramework --no-configuration-cache
+
+      - name: Build iOS Bundle
+        uses: gradle/gradle-build-action@v2
+        with:
+          arguments: :library:createIosBundle --no-configuration-cache
+
+      - name: Create distribution bundle
+        uses: gradle/gradle-build-action@v2
+        with:
+          arguments: :library:createDistributionBundle --no-configuration-cache
+
+      - name: Prepare artifacts directory
+        run: |
+          mkdir -p release-artifacts
+
+      - name: Copy JVM artifacts
+        run: |
+          cp library/build/libs/*.jar release-artifacts/ || true
+          echo "JVM artifacts copied"
+
+      - name: Copy Android artifacts
+        run: |
+          cp library/build/outputs/aar/*.aar release-artifacts/ || true
+          echo "Android artifacts copied"
+
+      - name: Copy iOS XCFramework
+        run: |
+          mkdir -p release-artifacts/ios
+          cp -R library/build/XCFrameworks/*.xcframework release-artifacts/ios/ || true
+          echo "iOS XCFramework copied"
+
+      - name: Copy iOS Bundle
+        run: |
+          cp library/build/distributions/*-ios.zip release-artifacts/ || true
+          echo "iOS bundle copied"
+
+      - name: Copy distribution bundle
+        run: |
+          cp library/build/distributions/*-all-platforms.zip release-artifacts/ || true
+          echo "Distribution bundle copied"
+
+      - name: List artifacts
+        run: |
+          {
+            echo "## Release Artifacts"
+            echo ""
+            find release-artifacts -type f -exec ls -lh {} \; | while IFS= read -r line; do
+              echo "- \`${line}\`"
+            done
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+          ls -lh release-artifacts/
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts
+          path: release-artifacts/
+          retention-days: 90
+          if-no-files-found: error
+
+  # Create GitHub Release
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: build-release-artifacts
+    if: success()
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine release details
+        id: release
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            TAG="${{ needs.build-release-artifacts.outputs.tag }}"
+            RELEASE_NAME="${{ github.event.inputs.release_name }}"
+            RELEASE_NOTES="${{ github.event.inputs.release_notes }}"
+            PRERELEASE="${{ github.event.inputs.prerelease }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+            RELEASE_NAME="${TAG}"
+            RELEASE_NOTES=""
+            PRERELEASE="false"
+          fi
+
+          # Use tag as release name if not provided
+          if [ -z "$RELEASE_NAME" ]; then
+            RELEASE_NAME="${TAG}"
+          fi
+
+          # Generate release notes from tag if not provided
+          if [ -z "$RELEASE_NOTES" ]; then
+            # Try to extract from git tag message
+            if git tag -l "${TAG}" | grep -q .; then
+              RELEASE_NOTES=$(git tag -l --format='%(contents)' "${TAG}" 2>/dev/null || echo "")
+            fi
+
+            # Fallback to default notes
+            if [ -z "$RELEASE_NOTES" ]; then
+              RELEASE_NOTES="## Release ${TAG}"$'\n\n'"### Artifacts"$'\n'"- **JVM**: JAR file for Java/Kotlin projects"$'\n'"- **Android**: AAR file for Android projects"$'\n'"- **iOS**: XCFramework and bundle for Swift Package Manager"$'\n'"- **All Platforms**: Complete distribution bundle with all artifacts"$'\n\n'"### Installation"$'\n'"See [README.md](README.md) for installation instructions."
+            fi
+          fi
+
+          {
+            echo "tag=${TAG}"
+            echo "name=${RELEASE_NAME}"
+            # Use a unique delimiter for multiline output to avoid conflicts
+            echo "notes<<RELEASE_NOTES_DELIMITER"
+            echo "${RELEASE_NOTES}"
+            echo "RELEASE_NOTES_DELIMITER"
+            echo "prerelease=${PRERELEASE}"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Tag: ${TAG}"
+          echo "Release Name: ${RELEASE_NAME}"
+          echo "Prerelease: ${PRERELEASE}"
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-artifacts
+          path: release-artifacts/
+
+      - name: Create GitHub Release
+        id: create_release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release.outputs.tag }}
+          name: ${{ steps.release.outputs.name }}
+          body: ${{ steps.release.outputs.notes }}
+          prerelease: ${{ steps.release.outputs.prerelease == 'true' }}
+          draft: false
+          files: |
+            release-artifacts/**/*
+          generate_release_notes: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Release summary
+        run: |
+          {
+            echo "## Release Created Successfully 🎉"
+            echo ""
+            echo "**Tag**: \`${{ steps.release.outputs.tag }}\`"
+            echo "**Release Name**: ${{ steps.release.outputs.name }}"
+            echo "**Prerelease**: ${{ steps.release.outputs.prerelease }}"
+            echo ""
+            echo "View the release: ${{ steps.create_release.outputs.url }}"
+            echo ""
+            echo "### Uploaded Artifacts"
+            find release-artifacts -type f | while IFS= read -r file; do
+              echo "- \`$(basename "${file}")\`"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
